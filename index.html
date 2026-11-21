@@ -27,8 +27,41 @@ const pad=n=>String(n).padStart(2,'0');
 function dayKey(d=new Date()){return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`}
 function localDate(k){const [y,m,d]=k.split('-').map(Number);return new Date(y,m-1,d)}
 function hash(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
-function read(){try{return JSON.parse(localStorage.getItem('yu_kokoro_v4'))||{days:[],completed:[],rewards:0}}catch(e){return {days:[],completed:[],rewards:0}}}
-function save(v){try{localStorage.setItem('yu_kokoro_v4',JSON.stringify(v))}catch(e){$('stampInfo').textContent='このブラウザではスタンプを保存できません。'}}
+const STORAGE_KEY='yu_kokoro_v4',BACKUP_KEY='yu_kokoro_v4_backup';
+function validDays(v){return Array.isArray(v)?[...new Set(v.filter(d=>typeof d==='string'&&/^\\d{4}-\\d{2}-\\d{2}$/.test(d)))].sort():[]}
+function read(){
+ let primary=null,backup=null;
+ try{primary=JSON.parse(localStorage.getItem(STORAGE_KEY))}catch(e){}
+ try{backup=JSON.parse(localStorage.getItem(BACKUP_KEY))}catch(e){}
+ const p=primary&&typeof primary==='object'&&!Array.isArray(primary)?primary:{};
+ const b=backup&&typeof backup==='object'&&!Array.isArray(backup)?backup:{};
+ const merged={...b,...p};
+ merged.days=validDays([...validDays(b.days),...validDays(p.days)]);
+ for(const field of ['completed','goldAchievements','milestoneSeen']){
+  merged[field]=[...new Set([...(Array.isArray(b[field])?b[field]:[]),...(Array.isArray(p[field])?p[field]:[])])];
+ }
+ return merged;
+}
+function save(v){
+ try{
+  const old=read();
+  const merged={...old,...v};
+  merged.days=validDays([...validDays(old.days),...validDays(v.days)]);
+  for(const field of ['completed','goldAchievements','milestoneSeen']){
+   merged[field]=[...new Set([...(Array.isArray(old[field])?old[field]:[]),...(Array.isArray(v[field])?v[field]:[])])];
+  }
+  const data=JSON.stringify(merged);
+  localStorage.setItem(STORAGE_KEY,data);
+  localStorage.setItem(BACKUP_KEY,data);
+  const check=JSON.parse(localStorage.getItem(STORAGE_KEY));
+  if(!check||validDays(check.days).length!==merged.days.length)throw new Error('保存検証に失敗');
+  return true;
+ }catch(e){
+  console.error('スタンプ保存エラー',e);
+  const info=$('stampInfo');if(info)info.textContent='⚠ 記録の保存を確認できません。通常モードで開き直し、ブラウザの保存設定をご確認ください。';
+  return false;
+ }
+}
 function consecutiveStreak(days,today){const set=new Set(days||[]);let cursor=localDate(today);if(!set.has(today))cursor.setDate(cursor.getDate()-1);let count=0;while(set.has(dayKey(cursor))){count++;cursor.setDate(cursor.getDate()-1)}return count}
 const milestones=[{day:7,title:'黄金の三角柱',rank:'こころの達人',icon:'👑',theme:'gold'},{day:14,title:'虹色の三角柱',rank:'こころの名人',icon:'🌈',theme:'rainbow'},{day:21,title:'伝説の三角柱',rank:'こころの賢者',icon:'🌟',theme:'star'},{day:28,title:'究極の三角柱',rank:'こころの伝説',icon:'💎',theme:'diamond'}];
 function milestoneFor(n){return milestones.find(m=>m.day===n)||{day:n,title:n%100===0?'百日の奇跡':n%70===0?'七十日の奇跡':n%49===0?'七週間の奇跡':'継続の三角柱',rank:n+'日継続の達人',icon:n%100===0?'🏆':'✨',theme:'gold'}}
@@ -55,6 +88,6 @@ function showResult(pick,isRare,restoredIndex=null){const today=dayKey(),m=items
 $('actionDone').addEventListener('click',finalizeChoice);
 function lockSpin(){btn.disabled=true;btn.textContent='✓ 今日のルーレットは終了しました';btn.classList.add('locked');}
 function finalizeChoice(){if(!activeKey)return;let v=read();v.completed=v.completed||[];if(!v.completed.includes(activeKey))v.completed.push(activeKey);v.lockedChoice={date:dayKey(),pick:last,rare:rare,messageIndex:currentMessageIndex};delete v.pendingChoice;save(v);lockSpin();$('actionDone').textContent='✓ 今日の一歩を決めました';$('actionDone').classList.add('completed');$('actionStatus').textContent='今日の選択を大切に。無理せず、あなたのペースで。'}
-btn.addEventListener('click',()=>{if(busy||read().lockedChoice?.date===dayKey())return;const previous=read().pendingChoice;if(previous?.date===dayKey()&&previous.attempts>=2){finalizeChoice();return}busy=true;const spinDay=dayKey();let stampState=read();stampState.days=Array.isArray(stampState.days)?stampState.days:[];if(!stampState.days.includes(spinDay)){stampState.days.push(spinDay);save(stampState)}updateStamps();btn.disabled=true;btn.textContent='✦ 回転中…';res.hidden=true;prism.classList.remove('rare');let pick=Math.floor(Math.random()*3);if(pick===last)pick=(pick+1+Math.floor(Math.random()*2))%3;last=pick;rare=Math.random()<.10;const start=current,extra=360*(5+Math.floor(Math.random()*3));const end=Math.ceil(start/360)*360+extra+(360-pick*120)%360;const duration=window.matchMedia('(prefers-reduced-motion: reduce)').matches?150:3000,t0=performance.now();function tick(t){let p=Math.min(1,(t-t0)/duration),ease=1-Math.pow(1-p,4);draw(start+(end-start)*ease);if(p<1)requestAnimationFrame(tick);else{current=end;draw(current);if(rare)prism.classList.add('rare');let v=read(),today=spinDay;updateStamps();showResult(pick,rare);let state=read();const attempts=(state.pendingChoice?.date===today?state.pendingChoice.attempts:0)+1;state.pendingChoice={date:today,pick,rare,messageIndex:currentMessageIndex,attempts};save(state);if(attempts>=2){finalizeChoice()}else{btn.disabled=false;btn.textContent='↻ もう一度だけ回す（残り1回）';$('actionStatus').textContent='この結果で決めるか、もう一度だけ回すか選べます。再挑戦すると前の結果には戻れません。'}busy=false}}requestAnimationFrame(tick)});
+btn.addEventListener('click',()=>{if(busy||read().lockedChoice?.date===dayKey())return;const previous=read().pendingChoice;if(previous?.date===dayKey()&&previous.attempts>=2){finalizeChoice();return}busy=true;const spinDay=dayKey();let stampState=read();stampState.days=Array.isArray(stampState.days)?stampState.days:[];if(!stampState.days.includes(spinDay)){stampState.days.push(spinDay);if(!save(stampState)){busy=false;return}}updateStamps();btn.disabled=true;btn.textContent='✦ 回転中…';res.hidden=true;prism.classList.remove('rare');let pick=Math.floor(Math.random()*3);if(pick===last)pick=(pick+1+Math.floor(Math.random()*2))%3;last=pick;rare=Math.random()<.10;const start=current,extra=360*(5+Math.floor(Math.random()*3));const end=Math.ceil(start/360)*360+extra+(360-pick*120)%360;const duration=window.matchMedia('(prefers-reduced-motion: reduce)').matches?150:3000,t0=performance.now();function tick(t){let p=Math.min(1,(t-t0)/duration),ease=1-Math.pow(1-p,4);draw(start+(end-start)*ease);if(p<1)requestAnimationFrame(tick);else{current=end;draw(current);if(rare)prism.classList.add('rare');let v=read(),today=spinDay;updateStamps();showResult(pick,rare);let state=read();const attempts=(state.pendingChoice?.date===today?state.pendingChoice.attempts:0)+1;state.pendingChoice={date:today,pick,rare,messageIndex:currentMessageIndex,attempts};save(state);if(attempts>=2){finalizeChoice()}else{btn.disabled=false;btn.textContent='↻ もう一度だけ回す（残り1回）';$('actionStatus').textContent='この結果で決めるか、もう一度だけ回すか選べます。再挑戦すると前の結果には戻れません。'}busy=false}}requestAnimationFrame(tick)});
 $('today').textContent=new Intl.DateTimeFormat('ja-JP',{year:'numeric',month:'long',day:'numeric',weekday:'long'}).format(new Date());updateStamps();const stored=read().lockedChoice;if(stored?.date===dayKey()&&Number.isInteger(stored.pick)&&stored.pick>=0&&stored.pick<3){last=stored.pick;rare=!!stored.rare;current=(360-last*120)%360;draw(current);if(rare)prism.classList.add('rare');showResult(last,rare,stored.messageIndex);updateStamps();lockSpin();}else{const pending=read().pendingChoice;if(pending?.date===dayKey()&&Number.isInteger(pending.pick)&&pending.pick>=0&&pending.pick<3){last=pending.pick;rare=!!pending.rare;current=(360-last*120)%360;draw(current);if(rare)prism.classList.add('rare');showResult(last,rare,pending.messageIndex);if(pending.attempts>=2){finalizeChoice()}else{btn.textContent='↻ もう一度だけ回す（残り1回）';$('actionStatus').textContent='この結果で決めるか、もう一度だけ回すか選べます。再挑戦すると前の結果には戻れません。'}}}
 </script></body></html>
